@@ -1,33 +1,81 @@
-use image::{Rgba, RgbaImage};
-use std::fs;
+use macroquad::prelude::*;
 
-// Простейшая 2D реализация "жадного меширования" для прямоугольных блоков (вокселей) в чанке.
-// Результат сохраняется как output/chunk.png: фон — голубой, мешированные прямоугольники — зелёные.
+const CHUNK_W: usize = 16;
+const CHUNK_H: usize = 16;
+const TILE_SIZE: f32 = 32.0; // pixels per cell
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Параметры чанка
-    let chunk_w = 16usize;
-    let chunk_h = 16usize;
-    let tile_px = 16usize; // размер одного блока в пикселях
-
-    let img_w = chunk_w * tile_px;
-    let img_h = chunk_h * tile_px;
-
+#[macroquad::main("Garden Rust - Chunk Viewer")]
+async fn main() {
     // Создаём массив вокселей: true = блок присутствует, false = пусто.
-    let mut voxels = vec![false; chunk_w * chunk_h];
+    let mut voxels = vec![false; CHUNK_W * CHUNK_H];
 
     // Пример: большая прямоугольная область (трава) с несколькими пустотами
     for y in 4..12 {
         for x in 2..14 {
-            voxels[y * chunk_w + x] = true;
+            voxels[y * CHUNK_W + x] = true;
         }
     }
-    // Пара случайных дыр в области
-    voxels[6 * chunk_w + 6] = false;
-    voxels[9 * chunk_w + 10] = false;
-    voxels[5 * chunk_w + 3] = false;
+    // Пара дыр
+    voxels[6 * CHUNK_W + 6] = false;
+    voxels[9 * CHUNK_W + 10] = false;
+    voxels[5 * CHUNK_W + 3] = false;
 
     // Жадное меширование (2D): объединяем соседние заполненные клетки в максимальные прямоугольники
+    let rects = greedy_meshing(&voxels, CHUNK_W, CHUNK_H);
+
+    // Рассчитаем оконный размер так, чтобы весь чанк помещался
+    let win_w = (CHUNK_W as f32) * TILE_SIZE;
+    let win_h = (CHUNK_H as f32) * TILE_SIZE;
+
+    // Установим удобный масштаб окна — macroquad задаёт размер в конфиге, но здесь мы можем просто масштабировать
+    // Мы не настраиваем конфиг динамически, так что пользуемся размером экрана и центрируем чанк
+
+    loop {
+        // Фон — светло-голубой
+        clear_background(Color::new(135.0 / 255.0, 206.0 / 255.0, 250.0 / 255.0, 1.0));
+
+        // Позиция для отрисовки чанка: центрируем на экране
+        let screen_w = screen_width();
+        let screen_h = screen_height();
+        let offset_x = (screen_w - win_w) / 2.0;
+        let offset_y = (screen_h - win_h) / 2.0;
+
+        // Рисуем границы чанка в виде рамки (опционально)
+        draw_rectangle_lines(offset_x - 1.0, offset_y - 1.0, win_w + 2.0, win_h + 2.0, 2.0, BLACK);
+
+        // Зеленый цвет для блоков
+        let green = Color::new(34.0 / 255.0, 139.0 / 255.0, 34.0 / 255.0, 1.0);
+
+        for (x, y, w, h) in &rects {
+            let px = offset_x + (*x as f32) * TILE_SIZE;
+            let py = offset_y + (*y as f32) * TILE_SIZE;
+            let pw = (*w as f32) * TILE_SIZE;
+            let ph = (*h as f32) * TILE_SIZE;
+
+            draw_rectangle(px, py, pw, ph, green);
+            // Нарисуем тонкую чёрную рамку вокруг каждого прямоугольника для наглядности
+            draw_rectangle_lines(px, py, pw, ph, 2.0, BLACK);
+        }
+
+        // Подсказка
+        draw_text(
+            "Greedy meshing: green blocks on blue background. Press ESC to quit.",
+            10.0,
+            20.0,
+            20.0,
+            BLACK,
+        );
+
+        // Выход по ESC
+        if is_key_pressed(KeyCode::Escape) {
+            break;
+        }
+
+        next_frame().await;
+    }
+}
+
+fn greedy_meshing(voxels: &[bool], chunk_w: usize, chunk_h: usize) -> Vec<(usize, usize, usize, usize)> {
     let mut visited = vec![false; chunk_w * chunk_h];
     let mut rects: Vec<(usize, usize, usize, usize)> = Vec::new(); // x,y,w,h in cells
 
@@ -70,33 +118,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Подготавливаем изображение: фон — светло-голубой
-    let bg = Rgba([135u8, 206u8, 250u8, 255u8]); // skyblue
-    let green = Rgba([34u8, 139u8, 34u8, 255u8]); // forest green-ish
-
-    let mut img = RgbaImage::from_pixel(img_w as u32, img_h as u32, bg);
-
-    // Рисуем мешированные прямоугольники зелёным цветом
-    for (x, y, w, h) in rects {
-        let px0 = (x * tile_px) as u32;
-        let py0 = (y * tile_px) as u32;
-        let px1 = ((x + w) * tile_px) as u32;
-        let py1 = ((y + h) * tile_px) as u32;
-
-        for yy in py0..py1 {
-            for xx in px0..px1 {
-                img.put_pixel(xx, yy, green);
-            }
-        }
-    }
-
-    // Сохраняем результат
-    fs::create_dir_all("output")?;
-    let out_path = "output/chunk.png";
-    img.save(out_path)?;
-
-    println!("Saved chunk image with greedy meshing to {} ({}x{} px)", out_path, img_w, img_h);
-    println!("Chunk cells: {}x{} ({} px per cell)", chunk_w, chunk_h, tile_px);
-
-    Ok(())
+    rects
 }
